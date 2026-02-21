@@ -20,7 +20,7 @@ from dharahil.langgraph_adapter import wrap_tool_with_dharahil
 
 # Initialize the client
 client = DharaHILClient(
-    base_url="http://localhost:4990",
+    base_url="https://dharahil-gateway.sudiptadhara.in",
     api_key="your-api-key",
     tenant_id="your-tenant-id",
     app_id="your-app-id",
@@ -53,7 +53,7 @@ The main client that communicates with the DharaHIL gateway.
 
 ```python
 client = DharaHILClient(
-    base_url="http://localhost:4990",
+    base_url="https://dharahil-gateway.sudiptadhara.in",
     api_key="your-api-key",
     tenant_id="your-tenant-id",
     app_id="your-app-id",
