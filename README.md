@@ -7,7 +7,7 @@ Intercept AI agent tool calls, route high-risk actions through human approval, a
 ## Installation
 
 ```bash
-pip install "git+https://github.com/Sudiptas-AI-Agents/dharahil-sdk.git"
+pipx install "git+https://github.com/Sudiptas-AI-Agents/dharahil-sdk.git"
 ```
 
 **Requirements:** Python 3.10+
@@ -15,11 +15,11 @@ pip install "git+https://github.com/Sudiptas-AI-Agents/dharahil-sdk.git"
 ## Quick Start
 
 ```python
-from dharahil.client import DharaClient
+from dharahil.client import DharaHILClient
 from dharahil.langgraph_adapter import wrap_tool_with_dharahil
 
 # Initialize the client
-client = DharaClient(
+client = DharaHILClient(
     base_url="http://localhost:4990",
     api_key="your-api-key",
     tenant_id="your-tenant-id",
@@ -47,12 +47,12 @@ When used inside a LangGraph `ToolNode`, the wrapped tool automatically:
 
 ## Components
 
-### `DharaClient`
+### `DharaHILClient`
 
 The main client that communicates with the DharaHIL gateway.
 
 ```python
-client = DharaClient(
+client = DharaHILClient(
     base_url="http://localhost:4990",
     api_key="your-api-key",
     tenant_id="your-tenant-id",
@@ -126,7 +126,7 @@ result = await wrapped_tool(
 
 ### `ToolExecutionInterceptor`
 
-Abstract base class for building custom interceptors. `DharaClient` extends this.
+Abstract base class for building custom interceptors. `DharaHILClient` extends this.
 
 ### Automatic Redaction
 

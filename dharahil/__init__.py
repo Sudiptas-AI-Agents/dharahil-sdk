@@ -1,4 +1,8 @@
+from .client import DharaHILClient
 from .interceptor import ToolExecutionInterceptor, InterceptorResult
 
-__all__ = ["ToolExecutionInterceptor", "InterceptorResult"]
+# Backward compatibility
+DharaClient = DharaHILClient
+
+__all__ = ["DharaHILClient", "DharaClient", "ToolExecutionInterceptor", "InterceptorResult"]
 

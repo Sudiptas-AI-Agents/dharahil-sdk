@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, Awaitable
 
 from langgraph.graph import interrupt
 
-from .client import DharaClient
+from .client import DharaHILClient
 from .interceptor import InterceptorAction
 
 
@@ -14,7 +14,7 @@ ToolCallable = Callable[..., Awaitable[Any]]
 def wrap_tool_with_dharahil(
     tool: ToolCallable,
     *,
-    dhara_client: DharaClient,
+    dhara_client: DharaHILClient,
     tool_name: str,
 ) -> ToolCallable:
     """

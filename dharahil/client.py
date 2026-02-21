@@ -8,7 +8,7 @@ from .interceptor import InterceptorAction, InterceptorResult, ToolExecutionInte
 from .redaction import redact
 
 
-class DharaClient(ToolExecutionInterceptor):
+class DharaHILClient(ToolExecutionInterceptor):
     """
     Concrete interceptor implementation that talks to the DharaHIL gateway.
     """
@@ -141,3 +141,7 @@ class DharaClient(ToolExecutionInterceptor):
             )
         resp.raise_for_status()
         return resp.json()
+
+
+# Backward compatibility
+DharaClient = DharaHILClient
