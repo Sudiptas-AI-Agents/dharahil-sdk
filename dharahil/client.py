@@ -144,6 +144,7 @@ class DharaHILClient(ToolExecutionInterceptor):
         updated_context_summary: str,
         updated_risk_level: str,
         tags: List[str],
+        display_hints: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         payload = {
             "version_from": version_from,
@@ -154,6 +155,8 @@ class DharaHILClient(ToolExecutionInterceptor):
             "updated_risk_level": updated_risk_level,
             "tags": tags,
         }
+        if display_hints is not None:
+            payload["display_hints"] = display_hints
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.post(
                 f"{self.base_url}/v1/requests/{request_id}/proposal",
