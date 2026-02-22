@@ -163,14 +163,14 @@ class DharaHILClient(ToolExecutionInterceptor):
             has_decision = last.get("last_decision") is not None
 
             if has_decision and after_version is not None:
-                # If the request is still on a stale decision (status is
-                # REVISE_REQUESTED but we already submitted a newer version),
-                # the current last_decision is from a previous round — skip it.
+                # Skip stale decisions from older versions.  A decision is
+                # stale when the version is *less than* after_version — it
+                # belongs to a previous round.  Decisions on the current
+                # version (>= after_version) are new and should be returned.
                 current_status = last.get("status", "")
                 current_version = last.get("version", 1)
-                if current_status == "REVISE_REQUESTED" and current_version >= after_version:
-                    # Status hasn't changed since our proposal update
-                    # reset to PENDING. Keep polling.
+                if current_status == "REVISE_REQUESTED" and current_version < after_version:
+                    # Stale decision from an older version — skip.
                     has_decision = False
                 elif current_status == "PENDING" and current_version >= after_version:
                     # Proposal accepted, waiting for new decision.
