@@ -63,13 +63,25 @@ class DharaHILClient(ToolExecutionInterceptor):
             )
 
         if resp.status_code == 400:
-            # Policy allowed or denied without approval; for now, treat as ALLOW
-            return InterceptorResult(action=InterceptorAction.ALLOW)
+            # Legacy gateway: parse detail to determine ALLOW vs DENY
+            try:
+                detail = resp.json().get("detail", "")
+            except Exception:
+                detail = resp.text
+            if "DENY" in str(detail):
+                return InterceptorResult(action=InterceptorAction.DENY, reason=str(detail))
+            return InterceptorResult(action=InterceptorAction.ALLOW, reason=str(detail))
 
         resp.raise_for_status()
         data = resp.json()
-        request_id = data["request_id"]
 
+        # New gateway format: returns {"action": "ALLOW"|"DENY", "request_id": null}
+        action = data.get("action")
+        if action and not data.get("request_id"):
+            mapped = InterceptorAction(action) if action in InterceptorAction.__members__ else InterceptorAction.ALLOW
+            return InterceptorResult(action=mapped, reason=f"Policy decision: {action}")
+
+        request_id = data["request_id"]
         return InterceptorResult(
             action=InterceptorAction.REQUIRE_APPROVAL,
             request_id=request_id,
