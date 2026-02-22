@@ -39,6 +39,7 @@ def wrap_tool_with_dharahil(
             "request_id": result.request_id,
             "tool_name": tool_name,
             "context": context,
+            "expires_at": result.expires_at,
         }
         decision_payload = await interrupt(pause_payload)
 

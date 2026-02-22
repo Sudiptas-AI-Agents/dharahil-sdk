@@ -95,6 +95,7 @@ class DharaHILClient(ToolExecutionInterceptor):
             action=InterceptorAction.REQUIRE_APPROVAL,
             request_id=request_id,
             reason="Awaiting human approval",
+            expires_at=data.get("expires_at"),
         )
 
     async def get_request(self, request_id: str) -> Dict[str, Any]:
@@ -110,28 +111,51 @@ class DharaHILClient(ToolExecutionInterceptor):
         self,
         request_id: str,
         *,
-        timeout_seconds: int = 600,
+        timeout_seconds: Optional[int] = None,
+        expires_at: Optional[str] = None,
         poll_interval_seconds: float = 2.0,
     ) -> Dict[str, Any]:
         """
         Polls DharaHIL until a decision is present or timeout elapses.
+
+        Timeout is determined in priority order:
+        1. ``timeout_seconds`` if provided explicitly
+        2. ``expires_at`` (ISO-8601 from InterceptorResult.expires_at)
+        3. Falls back to 600s (10 minutes)
 
         Returns the latest request payload from GET /v1/requests/{id} which
         includes last_decision / last_decision_note / last_decision_revise_input.
         """
         import asyncio
         import time
+        from datetime import datetime, timezone
 
-        deadline = time.time() + timeout_seconds
+        if timeout_seconds is not None:
+            effective_timeout = timeout_seconds
+        elif expires_at:
+            try:
+                expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+                effective_timeout = max(int(remaining) + 5, 10)  # +5s buffer, min 10s
+            except (ValueError, TypeError):
+                effective_timeout = 600
+        else:
+            effective_timeout = 600
+
+        deadline = time.time() + effective_timeout
         last = None
 
         while time.time() < deadline:
             last = await self.get_request(request_id)
             if last.get("last_decision") is not None:
                 return last
+            # Stop early if request is no longer PENDING
+            status = last.get("status", "")
+            if status not in ("PENDING", "REVISE_REQUESTED"):
+                return last
             await asyncio.sleep(poll_interval_seconds)
 
-        raise TimeoutError(f"No decision for request {request_id} within {timeout_seconds} seconds")
+        raise TimeoutError(f"No decision for request {request_id} within {effective_timeout} seconds")
 
     async def submit_proposal_update(
         self,

@@ -18,6 +18,7 @@ class InterceptorResult:
     action: InterceptorAction
     request_id: Optional[str] = None
     reason: Optional[str] = None
+    expires_at: Optional[str] = None  # ISO-8601 expiry from gateway
 
 
 class ToolExecutionInterceptor:
