@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import httpx
 
 from .context import ToolContext
 from .interceptor import InterceptorAction, InterceptorResult, ToolExecutionInterceptor
 from .redaction import redact
+
+# Type for the revision callback used by run_approval_loop.
+# Receives (current_args, revise_input, revise_patch) and returns updated_args.
+ReviseCallback = Callable[
+    [Dict[str, Any], str, Dict[str, Any]], Awaitable[Dict[str, Any]]
+]
 
 
 class DharaHILClient(ToolExecutionInterceptor):
@@ -114,6 +120,7 @@ class DharaHILClient(ToolExecutionInterceptor):
         timeout_seconds: Optional[int] = None,
         expires_at: Optional[str] = None,
         poll_interval_seconds: float = 2.0,
+        after_version: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Polls DharaHIL until a decision is present or timeout elapses.
@@ -122,6 +129,12 @@ class DharaHILClient(ToolExecutionInterceptor):
         1. ``timeout_seconds`` if provided explicitly
         2. ``expires_at`` (ISO-8601 from InterceptorResult.expires_at)
         3. Falls back to 600s (10 minutes)
+
+        If ``after_version`` is provided, ignores any decision that was made
+        before the given version (e.g. a stale "revise" from version 1 when
+        the caller has already submitted version 2). This is critical for the
+        revision loop: after submitting a proposal update, pass the new version
+        number so we wait for the *next* decision, not the old one.
 
         Returns the latest request payload from GET /v1/requests/{id} which
         includes last_decision / last_decision_note / last_decision_revise_input.
@@ -147,9 +160,26 @@ class DharaHILClient(ToolExecutionInterceptor):
 
         while time.time() < deadline:
             last = await self.get_request(request_id)
-            if last.get("last_decision") is not None:
+            has_decision = last.get("last_decision") is not None
+
+            if has_decision and after_version is not None:
+                # If the request is still on a stale decision (status is
+                # REVISE_REQUESTED but we already submitted a newer version),
+                # the current last_decision is from a previous round — skip it.
+                current_status = last.get("status", "")
+                current_version = last.get("version", 1)
+                if current_status == "REVISE_REQUESTED" and current_version >= after_version:
+                    # Status hasn't changed since our proposal update
+                    # reset to PENDING. Keep polling.
+                    has_decision = False
+                elif current_status == "PENDING" and current_version >= after_version:
+                    # Proposal accepted, waiting for new decision.
+                    has_decision = False
+
+            if has_decision:
                 return last
-            # Stop early if request is no longer PENDING
+
+            # Stop early if request reached a terminal state
             status = last.get("status", "")
             if status not in ("PENDING", "REVISE_REQUESTED"):
                 return last
@@ -189,6 +219,152 @@ class DharaHILClient(ToolExecutionInterceptor):
             )
         resp.raise_for_status()
         return resp.json()
+
+    async def run_approval_loop(
+        self,
+        *,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        context: Union[Dict[str, Any], ToolContext],
+        on_revise: Optional[ReviseCallback] = None,
+        poll_interval_seconds: float = 2.0,
+    ) -> Dict[str, Any]:
+        """
+        High-level helper that handles the full approval lifecycle including
+        revision loops. Suitable for polling-mode callers (non-LangGraph).
+
+        1. Calls ``before_execute()`` to register the request.
+        2. If ALLOW / DENY, returns immediately with ``{"action": "ALLOW"}``
+           or ``{"action": "DENY", "reason": "..."}``.
+        3. If REQUIRE_APPROVAL, polls ``wait_for_decision()``.
+        4. On approve → returns ``{"action": "APPROVED", "tool_args": {...}}``.
+        5. On reject → returns ``{"action": "REJECTED", "note": "..."}``.
+        6. On revise → calls ``on_revise(current_args, revise_input, revise_patch)``
+           to get updated args, submits a proposal update, then loops back to 3.
+        7. If ``on_revise`` is not provided and a revise decision comes in,
+           returns ``{"action": "REVISE_REQUESTED", ...}`` so the caller can
+           handle it manually.
+
+        Returns a dict with at minimum ``{"action": "..."}`` plus relevant data.
+        """
+        if isinstance(context, ToolContext):
+            ctx = context.to_dict()
+        else:
+            ctx = dict(context)
+
+        result = await self.before_execute(tool_name, tool_args, ctx)
+
+        if result.action == InterceptorAction.ALLOW:
+            return {"action": "ALLOW", "tool_args": tool_args}
+        if result.action == InterceptorAction.DENY:
+            return {"action": "DENY", "reason": result.reason}
+
+        request_id = result.request_id
+        current_version = 1
+        current_args = dict(tool_args)
+
+        while True:
+            decision_data = await self.wait_for_decision(
+                request_id,
+                expires_at=result.expires_at,
+                poll_interval_seconds=poll_interval_seconds,
+                after_version=current_version if current_version > 1 else None,
+            )
+
+            decision = decision_data.get("last_decision")
+            status = decision_data.get("status", "")
+
+            if decision == "approve" or status == "APPROVED":
+                return {
+                    "action": "APPROVED",
+                    "request_id": request_id,
+                    "tool_args": current_args,
+                    "version": decision_data.get("version", current_version),
+                }
+
+            if decision == "reject" or status == "REJECTED":
+                return {
+                    "action": "REJECTED",
+                    "request_id": request_id,
+                    "note": decision_data.get("last_decision_note", ""),
+                    "version": decision_data.get("version", current_version),
+                }
+
+            if status in ("AUTO_ALLOWED",):
+                return {
+                    "action": "AUTO_ALLOWED",
+                    "request_id": request_id,
+                    "tool_args": current_args,
+                }
+
+            if status in ("AUTO_DENIED",):
+                return {
+                    "action": "AUTO_DENIED",
+                    "request_id": request_id,
+                    "reason": "Policy auto-denied the revised proposal",
+                }
+
+            if status == "EXPIRED":
+                return {
+                    "action": "EXPIRED",
+                    "request_id": request_id,
+                }
+
+            if decision == "revise" or status == "REVISE_REQUESTED":
+                revise_input = decision_data.get("last_decision_revise_input", "")
+                revise_patch = {}  # Gateway doesn't return patch in GET response
+
+                if on_revise is None:
+                    # No callback — return to caller so they can handle manually.
+                    return {
+                        "action": "REVISE_REQUESTED",
+                        "request_id": request_id,
+                        "revise_input": revise_input,
+                        "current_args": current_args,
+                        "version": current_version,
+                    }
+
+                # Call the revision callback to compute new args.
+                updated_args = await on_revise(current_args, revise_input, revise_patch)
+                current_args = updated_args
+                redacted_args, _ = redact(current_args)
+
+                proposal_resp = await self.submit_proposal_update(
+                    request_id,
+                    version_from=current_version,
+                    updated_tool_name=tool_name,
+                    updated_tool_args=current_args,
+                    updated_tool_args_redacted=redacted_args,
+                    updated_context_summary=ctx.get("context_summary", ""),
+                    updated_risk_level=ctx.get("risk_level", "MEDIUM"),
+                    tags=ctx.get("tags", []),
+                )
+                current_version = proposal_resp.get("version", current_version + 1)
+
+                # Check if re-evaluated policy auto-resolved.
+                new_status = proposal_resp.get("status")
+                if new_status == "AUTO_ALLOWED":
+                    return {
+                        "action": "AUTO_ALLOWED",
+                        "request_id": request_id,
+                        "tool_args": current_args,
+                    }
+                if new_status == "AUTO_DENIED":
+                    return {
+                        "action": "AUTO_DENIED",
+                        "request_id": request_id,
+                        "reason": "Policy auto-denied the revised proposal",
+                    }
+
+                # Loop back to wait for the next decision on the revised proposal.
+                continue
+
+            # Unknown status — return raw data.
+            return {
+                "action": status or "UNKNOWN",
+                "request_id": request_id,
+                "raw": decision_data,
+            }
 
 
 # Backward compatibility
