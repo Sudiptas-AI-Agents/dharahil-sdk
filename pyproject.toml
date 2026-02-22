@@ -1,6 +1,6 @@
 [project]
 name = "dharahil"
-version = "0.1.0"
+version = "0.1.1"
 description = "DharaHIL Python SDK and tool execution interceptor"
 authors = [{ name = "DharaHIL", email = "dev@dharahil.local" }]
 requires-python = ">=3.10"
