@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from .context import ToolContext
 from .interceptor import InterceptorAction, InterceptorResult, ToolExecutionInterceptor
 from .redaction import redact
 
@@ -29,30 +30,38 @@ class DharaHILClient(ToolExecutionInterceptor):
         self.environment = environment
 
     async def before_execute(
-        self, tool_name: str, tool_args: Dict[str, Any], context: Dict[str, Any]
+        self, tool_name: str, tool_args: Dict[str, Any], context: Union[Dict[str, Any], ToolContext]
     ) -> InterceptorResult:
+        # Normalize: accept both ToolContext and plain dict
+        if isinstance(context, ToolContext):
+            ctx = context.to_dict()
+        else:
+            ctx = context
+
         redacted_args, _ = redact(tool_args)
 
-        risk_level = context.get("risk_level", "MEDIUM")
-        tags: List[str] = context.get("tags", [])
+        risk_level = ctx.get("risk_level", "MEDIUM")
+        tags: List[str] = ctx.get("tags", [])
 
         payload = {
             "tenant_id": self.tenant_id,
             "app_id": self.app_id,
-            "agent_id": context.get("agent_id", "unknown"),
-            "run_id": context.get("run_id", "run"),
-            "step_id": context.get("step_id", "step"),
+            "agent_id": ctx.get("agent_id", "unknown"),
+            "run_id": ctx.get("run_id", "run"),
+            "step_id": ctx.get("step_id", "step"),
             "tool_name": tool_name,
             "tool_args": tool_args,
             "tool_args_redacted": redacted_args,
-            "context_summary": context.get("context_summary", ""),
+            "context_summary": ctx.get("context_summary", ""),
             "risk_level": risk_level,
             "environment": self.environment,
             "tags": tags,
-            "idempotency_key": context.get("idempotency_key", context.get("run_id", "run")),
+            "idempotency_key": ctx.get("idempotency_key", ctx.get("run_id", "run")),
             "webhook": {
-                "decision_url": context.get("decision_url", ""),
+                "decision_url": ctx.get("decision_url", ""),
             },
+            "metadata": ctx.get("metadata", {}),
+            "display_hints": ctx.get("display"),
         }
 
         async with httpx.AsyncClient(timeout=10) as client:

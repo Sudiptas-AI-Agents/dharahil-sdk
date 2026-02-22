@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
+
+from .context import ToolContext
 
 
 class InterceptorAction(str, Enum):
@@ -25,7 +27,7 @@ class ToolExecutionInterceptor:
     """
 
     async def before_execute(
-        self, tool_name: str, tool_args: Dict[str, Any], context: Dict[str, Any]
+        self, tool_name: str, tool_args: Dict[str, Any], context: Union[Dict[str, Any], ToolContext]
     ) -> InterceptorResult:
         raise NotImplementedError
 
