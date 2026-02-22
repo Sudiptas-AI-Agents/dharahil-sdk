@@ -59,7 +59,7 @@ def wrap_tool_with_dharahil(
             "expires_at": result.expires_at,
             "type": "approval_required",
         }
-        decision_payload = await interrupt(pause_payload)
+        decision_payload = interrupt(pause_payload)
 
         while True:
             decision = decision_payload.get("decision")
@@ -116,7 +116,7 @@ def wrap_tool_with_dharahil(
                         "version": current_version,
                         "type": "revised_proposal_pending",
                     }
-                    decision_payload = await interrupt(pause_payload)
+                    decision_payload = interrupt(pause_payload)
                     continue
 
                 # No updated_args yet — ask the orchestrator to compute them.
@@ -132,7 +132,7 @@ def wrap_tool_with_dharahil(
                     "revise_patch": revise_patch,
                     "current_args": dict(kwargs),
                 }
-                decision_payload = await interrupt(revision_payload)
+                decision_payload = interrupt(revision_payload)
                 continue
 
             raise RuntimeError(f"Invalid decision '{decision}' from DharaHIL")
