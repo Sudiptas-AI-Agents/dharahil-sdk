@@ -87,6 +87,7 @@ def wrap_tool_with_dharahil(
                 revise_input = decision_payload.get("revise_input", "")
                 revise_patch = decision_payload.get("revise_patch", {})
                 updated_args = decision_payload.get("updated_args")
+                updated_ctx_summary = decision_payload.get("updated_context_summary")
 
                 if updated_args:
                     kwargs.update(updated_args)
@@ -102,7 +103,7 @@ def wrap_tool_with_dharahil(
                             updated_tool_name=tool_name,
                             updated_tool_args=kwargs,
                             updated_tool_args_redacted=redacted_args,
-                            updated_context_summary=context.get("context_summary", ""),
+                            updated_context_summary=updated_ctx_summary or context.get("context_summary", ""),
                             updated_risk_level=context.get("risk_level", "MEDIUM"),
                             tags=context.get("tags", []),
                         )
