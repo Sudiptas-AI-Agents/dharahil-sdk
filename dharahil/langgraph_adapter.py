@@ -51,6 +51,12 @@ def wrap_tool_with_dharahil(
         request_id = result.request_id
         current_version = 1  # initial version from create_request
 
+        # Track which (request_id, version_from) transitions have been
+        # submitted.  On LangGraph replay, previous interrupt() calls
+        # return instantly, but submit_proposal_update() would re-execute
+        # as a side effect.  This set prevents duplicate POSTs.
+        submitted_versions: set[tuple[str, int]] = set()
+
         # First interrupt: tell the orchestrator we need approval.
         pause_payload = {
             "request_id": request_id,
@@ -83,29 +89,37 @@ def wrap_tool_with_dharahil(
                 updated_args = decision_payload.get("updated_args")
 
                 if updated_args:
-                    # The orchestrator already computed the new args — submit proposal.
                     kwargs.update(updated_args)
-                    redacted_args, _ = redact(kwargs)
-                    proposal_resp = await dhara_client.submit_proposal_update(
-                        request_id,
-                        version_from=current_version,
-                        updated_tool_name=tool_name,
-                        updated_tool_args=kwargs,
-                        updated_tool_args_redacted=redacted_args,
-                        updated_context_summary=context.get("context_summary", ""),
-                        updated_risk_level=context.get("risk_level", "MEDIUM"),
-                        tags=context.get("tags", []),
-                    )
-                    current_version = proposal_resp.get("version", current_version + 1)
 
-                    # Check if re-evaluated policy auto-resolved.
-                    new_status = proposal_resp.get("status")
-                    if new_status == "AUTO_ALLOWED":
-                        return await tool(*args, **kwargs)
-                    if new_status == "AUTO_DENIED":
-                        raise RuntimeError(
-                            f"DharaHIL denied revised tool {tool_name}: policy auto-denied"
+                    # Guard against LangGraph replay: skip if we already
+                    # submitted this version transition.
+                    submit_key = (request_id, current_version)
+                    if submit_key not in submitted_versions:
+                        redacted_args, _ = redact(kwargs)
+                        proposal_resp = await dhara_client.submit_proposal_update(
+                            request_id,
+                            version_from=current_version,
+                            updated_tool_name=tool_name,
+                            updated_tool_args=kwargs,
+                            updated_tool_args_redacted=redacted_args,
+                            updated_context_summary=context.get("context_summary", ""),
+                            updated_risk_level=context.get("risk_level", "MEDIUM"),
+                            tags=context.get("tags", []),
                         )
+                        current_version = proposal_resp.get("version", current_version + 1)
+                        submitted_versions.add(submit_key)
+
+                        # Check if re-evaluated policy auto-resolved.
+                        new_status = proposal_resp.get("status")
+                        if new_status == "AUTO_ALLOWED":
+                            return await tool(*args, **kwargs)
+                        if new_status == "AUTO_DENIED":
+                            raise RuntimeError(
+                                f"DharaHIL denied revised tool {tool_name}: policy auto-denied"
+                            )
+                    else:
+                        # Replay: version was already submitted, just bump.
+                        current_version += 1
 
                     # Still needs approval — interrupt again.
                     pause_payload = {
