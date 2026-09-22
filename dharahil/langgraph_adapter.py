@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Awaitable
 
-from langgraph.graph import interrupt
+try:  # LangGraph >= 0.2.57 (and all 1.x) export interrupt from langgraph.types
+    from langgraph.types import interrupt
+except ImportError:  # pragma: no cover - older LangGraph
+    from langgraph.graph import interrupt  # type: ignore[no-redef]
 
 from .client import DharaHILClient
 from .interceptor import InterceptorAction
@@ -10,6 +13,19 @@ from .redaction import redact
 
 
 ToolCallable = Callable[..., Awaitable[Any]]
+
+_EXECUTABLE = {"APPROVED", "AUTO_ALLOWED"}
+
+
+async def _confirmed_args(client: DharaHILClient, request_id: str) -> Dict[str, Any] | None:
+    """Return the approved args from the gateway, or raise if it has not approved."""
+    state = await client.get_request(request_id)
+    status = state.get("status")
+    if status not in _EXECUTABLE:
+        raise RuntimeError(
+            f"DharaHIL has not approved request {request_id} (status={status}); refusing to execute"
+        )
+    return state.get("approved_args")
 
 
 def wrap_tool_with_dharahil(
@@ -26,7 +42,9 @@ def wrap_tool_with_dharahil(
     1. Calls ``before_execute`` — if ALLOW, runs immediately; if DENY, raises.
     2. If REQUIRE_APPROVAL, pauses via ``interrupt()`` with the request details.
     3. The orchestrator resumes the graph with a decision payload:
-       - ``{"decision": "approve"}`` → execute the tool
+       - ``{"decision": "approve"}`` or ``{"decision": "edit"}`` → confirm the
+         gateway status is APPROVED, then execute with the gateway's
+         ``approved_args`` (a human may have edited them)
        - ``{"decision": "reject", "note": "..."}`` → raise RuntimeError
        - ``{"decision": "revise", "revise_input": "...", "updated_args": {...}}``
          → submit updated proposal, then pause again for the next decision
@@ -70,11 +88,16 @@ def wrap_tool_with_dharahil(
         while True:
             decision = decision_payload.get("decision")
 
-            if decision == "approve":
-                # If the orchestrator provided updated args, use those.
-                updated_args = decision_payload.get("updated_args")
-                if updated_args:
-                    kwargs.update(updated_args)
+            if decision in ("approve", "edit"):
+                # The gateway, not the resume payload, is the source of truth:
+                # confirm it recorded the approval and run the exact args the
+                # human approved (they may have edited them).
+                approved = await _confirmed_args(dhara_client, request_id)
+                if approved is not None:
+                    kwargs.clear()
+                    kwargs.update(approved)
+                elif decision_payload.get("updated_args"):
+                    kwargs.update(decision_payload["updated_args"])
                 return await tool(*args, **kwargs)
 
             if decision == "reject":

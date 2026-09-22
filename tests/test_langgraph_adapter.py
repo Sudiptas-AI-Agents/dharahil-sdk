@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Mock langgraph before importing the adapter
+# Mock langgraph before importing the adapter. interrupt() is synchronous in
+# LangGraph, so the mock must be too (an AsyncMock returns a coroutine).
 mock_langgraph = MagicMock()
-mock_interrupt = AsyncMock()
-mock_langgraph.graph.interrupt = mock_interrupt
+mock_interrupt = MagicMock()
+mock_langgraph.types.interrupt = mock_interrupt
 sys.modules["langgraph"] = mock_langgraph
+sys.modules["langgraph.types"] = mock_langgraph.types
 sys.modules["langgraph.graph"] = mock_langgraph.graph
 
 from dharahil.client import DharaHILClient
@@ -18,13 +20,15 @@ from dharahil.langgraph_adapter import wrap_tool_with_dharahil
 
 @pytest.fixture
 def client():
-    return DharaHILClient(
+    c = DharaHILClient(
         base_url="http://test:4990",
         api_key="test-key",
         tenant_id="tid",
         app_id="aid",
         environment="dev",
     )
+    c.get_request = AsyncMock(return_value={"status": "APPROVED", "approved_args": None})
+    return c
 
 
 @pytest.fixture(autouse=True)
@@ -126,7 +130,7 @@ async def test_revise_with_updated_args_submits_proposal_and_re_interrupts(clien
 
     call_count = 0
 
-    async def interrupt_side_effect(payload):
+    def interrupt_side_effect(payload):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -171,7 +175,7 @@ async def test_revise_without_updated_args_sends_revision_instructions(client):
 
     call_count = 0
 
-    async def interrupt_side_effect(payload):
+    def interrupt_side_effect(payload):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -215,7 +219,7 @@ async def test_revise_then_reject(client):
 
     call_count = 0
 
-    async def interrupt_side_effect(payload):
+    def interrupt_side_effect(payload):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
@@ -303,3 +307,30 @@ async def test_approve_with_updated_args(client):
     assert result == "sent to override"
     call_kwargs = tool.call_args[1]
     assert call_kwargs["to"] == "override@example.com"
+
+
+@pytest.mark.asyncio
+async def test_edit_runs_gateway_approved_args(client):
+    tool = AsyncMock(return_value="sent")
+    client.before_execute = AsyncMock(return_value=_require_approval_result())
+    client.get_request = AsyncMock(return_value={"status": "APPROVED", "approved_args": {"to": "carol@example.com"}})
+    mock_interrupt.side_effect = None
+    mock_interrupt.return_value = None
+
+    with patch("dharahil.langgraph_adapter.interrupt", return_value={"decision": "edit"}):
+        wrapped = wrap_tool_with_dharahil(tool, dhara_client=client, tool_name="send_email")
+        assert await wrapped(to="bob@example.com") == "sent"
+    tool.assert_called_once_with(to="carol@example.com")
+
+
+@pytest.mark.asyncio
+async def test_resume_approve_without_gateway_approval_refuses(client):
+    tool = AsyncMock()
+    client.before_execute = AsyncMock(return_value=_require_approval_result())
+    client.get_request = AsyncMock(return_value={"status": "PENDING"})
+
+    with patch("dharahil.langgraph_adapter.interrupt", return_value={"decision": "approve"}):
+        wrapped = wrap_tool_with_dharahil(tool, dhara_client=client, tool_name="send_email")
+        with pytest.raises(RuntimeError, match="has not approved"):
+            await wrapped(to="bob@example.com")
+    tool.assert_not_called()

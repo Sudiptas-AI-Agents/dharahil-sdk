@@ -22,7 +22,8 @@ def _make_client() -> DharaHILClient:
 
 @pytest.mark.asyncio
 async def test_wait_skips_stale_revise_decision():
-    """After submitting version 2, a stale REVISE_REQUESTED with version=2 is skipped."""
+    """After submitting version 2, a REVISE_REQUESTED still reported at version 1
+    (the proposal has not landed yet) is stale and skipped."""
     client = _make_client()
     call_count = 0
 
@@ -33,7 +34,7 @@ async def test_wait_skips_stale_revise_decision():
             # First 2 polls: stale revise from version 1
             return {
                 "status": "REVISE_REQUESTED",
-                "version": 2,
+                "version": 1,
                 "last_decision": "revise",
                 "last_decision_revise_input": "old instructions",
             }
@@ -413,3 +414,17 @@ async def test_loop_multiple_revisions():
     assert result["tool_args"]["text"] == "revision-2"
     assert revise_count == 2
     assert submit_call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_approval_loop_uses_approved_args_after_edit():
+    from dharahil.client import DharaHILClient
+    from dharahil.interceptor import InterceptorAction, InterceptorResult
+
+    c = DharaHILClient(base_url="http://t", api_key="k", tenant_id="t", app_id="a", environment="dev")
+    c.before_execute = AsyncMock(return_value=InterceptorResult(
+        action=InterceptorAction.REQUIRE_APPROVAL, request_id="r1", expires_at=None))
+    c.wait_for_decision = AsyncMock(return_value={
+        "status": "APPROVED", "last_decision": "edit", "version": 2, "approved_args": {"to": "new@x.com"}})
+    out = await c.run_approval_loop(tool_name="send_email", tool_args={"to": "old@x.com"}, context={})
+    assert out["action"] == "APPROVED" and out["tool_args"] == {"to": "new@x.com"} and out["edited"] is True

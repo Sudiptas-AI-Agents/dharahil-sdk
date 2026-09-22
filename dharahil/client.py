@@ -274,11 +274,13 @@ class DharaHILClient(ToolExecutionInterceptor):
             decision = decision_data.get("last_decision")
             status = decision_data.get("status", "")
 
-            if decision == "approve" or status == "APPROVED":
+            if status == "APPROVED":
+                # A human may have edited the args; always run what they approved.
                 return {
                     "action": "APPROVED",
                     "request_id": request_id,
-                    "tool_args": current_args,
+                    "tool_args": decision_data.get("approved_args") or current_args,
+                    "edited": decision == "edit",
                     "version": decision_data.get("version", current_version),
                 }
 
