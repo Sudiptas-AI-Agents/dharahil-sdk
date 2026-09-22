@@ -130,18 +130,38 @@ Abstract base class for building custom interceptors. `DharaHILClient` extends t
 
 ### Automatic Redaction
 
-The SDK automatically redacts sensitive fields in tool arguments before sending them to the gateway. Fields like `api_key`, `token`, `password`, and high-entropy strings (>12 chars) are replaced with `[REDACTED]`.
+The SDK redacts the copy of the arguments that approvers see. Values under secret-looking keys (`api_key`, `token`, `password`, `secret`, …) are masked whole. Inside other strings, known credential shapes (`sk-…`, `xoxb-…`, `ghp_…`, AWS keys, JWTs) and 20+ character runs mixing letters and digits are masked in place, so ordinary prose stays readable. Nested dicts and lists are walked.
 
 ```python
 from dharahil.redaction import redact
 
-redacted_args, redacted_keys = redact({
+redacted, report = redact({
     "to": "user@example.com",
     "api_key": "sk-abc123xyz",
+    "note": "deploy image a3f9c2e1b7d4f8e6a1c2b3d4 now",
 })
-# redacted_args = {"to": "user@example.com", "api_key": "[REDACTED]"}
-# redacted_keys = ["api_key"]
+# redacted == {"to": "user@example.com", "api_key": "***REDACTED***",
+#              "note": "deploy image ***REDACTED*** now"}
+# report["fields"] == [{"key": "api_key", "reason": "secret_key"},
+#                      {"key": "note", "reason": "high_entropy"}]
 ```
+
+### CrewAI
+
+```python
+from dharahil.crewai import require_approval
+
+send_email = require_approval(
+    SendEmailTool(),
+    dhara_client=client,
+    context=lambda args: ToolContext(
+        agent_id="crew", run_id=run_id, risk_level="HIGH",
+        context_summary=f"Email {args['to']}",
+    ),
+)
+```
+
+The tool runs only after DharaHIL allows it or a human approves, with the args the human approved. When blocked, `_run` returns a sentence explaining why, so the agent can adapt instead of crashing.
 
 ## Dependencies
 
