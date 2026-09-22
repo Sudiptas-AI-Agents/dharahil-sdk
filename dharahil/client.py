@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
 import httpx
@@ -13,6 +16,13 @@ from .redaction import redact
 ReviseCallback = Callable[
     [Dict[str, Any], str, Dict[str, Any]], Awaitable[Dict[str, Any]]
 ]
+
+
+def idempotency_key(run_id: str, tool_name: str, tool_args: Dict[str, Any]) -> str:
+    """Same (run, tool, args) → same key, so a retry reuses its pending request
+    while a different call never does. Matches the MCP server's scheme."""
+    canonical = json.dumps([run_id, tool_name, tool_args], sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 class DharaHILClient(ToolExecutionInterceptor):
@@ -34,6 +44,7 @@ class DharaHILClient(ToolExecutionInterceptor):
         self.tenant_id = tenant_id
         self.app_id = app_id
         self.environment = environment
+        self.session_run_id = f"run-{uuid.uuid4().hex[:12]}"
 
     async def before_execute(
         self, tool_name: str, tool_args: Dict[str, Any], context: Union[Dict[str, Any], ToolContext]
@@ -48,12 +59,15 @@ class DharaHILClient(ToolExecutionInterceptor):
 
         risk_level = ctx.get("risk_level", "MEDIUM")
         tags: List[str] = ctx.get("tags", [])
+        # Without a run_id, this client instance is one run. A shared constant
+        # would let "Approve for this run" cover every run of the app.
+        run_id = ctx.get("run_id") or self.session_run_id
 
         payload = {
             "tenant_id": self.tenant_id,
             "app_id": self.app_id,
             "agent_id": ctx.get("agent_id", "unknown"),
-            "run_id": ctx.get("run_id", "run"),
+            "run_id": run_id,
             "step_id": ctx.get("step_id", "step"),
             "tool_name": tool_name,
             "tool_args": tool_args,
@@ -62,7 +76,10 @@ class DharaHILClient(ToolExecutionInterceptor):
             "risk_level": risk_level,
             "environment": self.environment,
             "tags": tags,
-            "idempotency_key": ctx.get("idempotency_key", ctx.get("run_id", "run")),
+            # One key per distinct call. Previously ToolContext sent "" (and dicts
+            # sent the run_id), so unrelated calls collapsed onto one pending
+            # request and one human approval authorised all of them.
+            "idempotency_key": ctx.get("idempotency_key") or idempotency_key(run_id, tool_name, tool_args),
             "webhook": {
                 "decision_url": ctx.get("decision_url", ""),
             },
@@ -77,26 +94,19 @@ class DharaHILClient(ToolExecutionInterceptor):
                 headers={"X-DHARA-API-KEY": self.api_key},
             )
 
-        if resp.status_code == 400:
-            # Legacy gateway: parse detail to determine ALLOW vs DENY
-            try:
-                detail = resp.json().get("detail", "")
-            except Exception:
-                detail = resp.text
-            if "DENY" in str(detail):
-                return InterceptorResult(action=InterceptorAction.DENY, reason=str(detail))
-            return InterceptorResult(action=InterceptorAction.ALLOW, reason=str(detail))
-
+        # Fail closed: any non-2xx (gateway error, proxy, WAF) raises, so the
+        # tool never runs on a response we don't understand.
         resp.raise_for_status()
         data = resp.json()
 
-        # New gateway format: returns {"action": "ALLOW"|"DENY", "request_id": null}
-        action = data.get("action")
-        if action and not data.get("request_id"):
-            mapped = InterceptorAction(action) if action in InterceptorAction.__members__ else InterceptorAction.ALLOW
-            return InterceptorResult(action=mapped, reason=f"Policy decision: {action}")
+        # {"action": "ALLOW"|"DENY", "request_id": null} when policy decides alone.
+        request_id = data.get("request_id")
+        if not request_id:
+            action = data.get("action")
+            if action == "ALLOW":
+                return InterceptorResult(action=InterceptorAction.ALLOW, reason="Policy decision: ALLOW")
+            return InterceptorResult(action=InterceptorAction.DENY, reason=f"Policy decision: {action}")
 
-        request_id = data["request_id"]
         return InterceptorResult(
             action=InterceptorAction.REQUIRE_APPROVAL,
             request_id=request_id,
