@@ -40,7 +40,7 @@ async def test_before_execute_with_dict(client):
         mock_instance.__aexit__ = AsyncMock(return_value=False)
         mock_client.return_value = mock_instance
 
-        result = await client.before_execute(
+        await client.before_execute(
             "send_email",
             {"to": "bob@example.com"},
             {"agent_id": "bot", "run_id": "r1", "risk_level": "HIGH"},
@@ -70,7 +70,7 @@ async def test_before_execute_with_tool_context(client):
             metadata={"workspace": "acme"},
             display=DisplayHints(title="Post in #sales", category="communication"),
         )
-        result = await client.before_execute("send_slack", {"channel": "#sales"}, ctx)
+        await client.before_execute("send_slack", {"channel": "#sales"}, ctx)
 
         call_args = mock_instance.post.call_args
         payload = call_args.kwargs["json"]
@@ -89,7 +89,7 @@ async def test_before_execute_dict_without_metadata(client):
         mock_instance.__aexit__ = AsyncMock(return_value=False)
         mock_client.return_value = mock_instance
 
-        result = await client.before_execute(
+        await client.before_execute(
             "read_file",
             {"path": "/tmp/x"},
             {"agent_id": "bot", "run_id": "r3"},

@@ -1,6 +1,4 @@
 """Tests for expires_at propagation through InterceptorResult, before_execute, and wait_for_decision."""
-import asyncio
-import time
 from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
