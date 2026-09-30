@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import urllib.parse
 import uuid
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Union
 
@@ -122,6 +123,22 @@ class DharaHILClient(ToolExecutionInterceptor):
             )
         resp.raise_for_status()
         return resp.json()
+
+    async def standing_approvals(self) -> Dict[str, Any]:
+        """Grants (this key's tenant/app) and the tenant's current policy. Read-only."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v1/agent/standing-approvals",
+                                    headers={"X-DHARA-API-KEY": self.api_key})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def revoke_grant(self, grant_id: str) -> None:
+        """Revoke one of this key's own standing approvals (idempotent)."""
+        quoted_id = urllib.parse.quote(str(grant_id), safe="")
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.delete(f"{self.base_url}/v1/agent/grants/{quoted_id}",
+                                       headers={"X-DHARA-API-KEY": self.api_key})
+        resp.raise_for_status()
 
     async def wait_for_decision(
         self,
@@ -292,6 +309,7 @@ class DharaHILClient(ToolExecutionInterceptor):
                     "tool_args": decision_data.get("approved_args") or current_args,
                     "edited": decision == "edit",
                     "version": decision_data.get("version", current_version),
+                    "choice": decision_data.get("last_decision_choice"),
                 }
 
             if decision == "reject" or status == "REJECTED":
