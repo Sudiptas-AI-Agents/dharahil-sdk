@@ -28,3 +28,11 @@ async def test_standing_approvals_and_revoke():
     respx.delete("https://hil.test/v1/agent/grants/nope").mock(return_value=httpx.Response(404))
     with pytest.raises(httpx.HTTPStatusError):
         await _client().revoke_grant("nope")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_revoke_grant_quotes_the_id():
+    rv = respx.delete("https://hil.test/v1/agent/grants/a%2Fb").mock(return_value=httpx.Response(204))
+    await _client().revoke_grant("a/b")
+    assert rv.called

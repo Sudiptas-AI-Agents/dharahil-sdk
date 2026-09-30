@@ -428,3 +428,18 @@ async def test_approval_loop_uses_approved_args_after_edit():
         "status": "APPROVED", "last_decision": "edit", "version": 2, "approved_args": {"to": "new@x.com"}})
     out = await c.run_approval_loop(tool_name="send_email", tool_args={"to": "old@x.com"}, context={})
     assert out["action"] == "APPROVED" and out["tool_args"] == {"to": "new@x.com"} and out["edited"] is True
+
+
+@pytest.mark.asyncio
+async def test_approval_loop_returns_the_choice():
+    from dharahil.client import DharaHILClient
+    from dharahil.interceptor import InterceptorAction, InterceptorResult
+
+    c = DharaHILClient(base_url="http://t", api_key="k", tenant_id="t", app_id="a", environment="dev")
+    c.before_execute = AsyncMock(return_value=InterceptorResult(
+        action=InterceptorAction.REQUIRE_APPROVAL, request_id="r1", expires_at=None))
+    c.wait_for_decision = AsyncMock(return_value={
+        "status": "APPROVED", "last_decision": "approve", "version": 1,
+        "last_decision_choice": "project"})
+    out = await c.run_approval_loop(tool_name="allow_site", tool_args={"site": "x"}, context={})
+    assert out["action"] == "APPROVED" and out["choice"] == "project"
