@@ -123,6 +123,21 @@ class DharaHILClient(ToolExecutionInterceptor):
         resp.raise_for_status()
         return resp.json()
 
+    async def standing_approvals(self) -> Dict[str, Any]:
+        """Grants (this key's tenant/app) and the tenant's current policy. Read-only."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{self.base_url}/v1/agent/standing-approvals",
+                                    headers={"X-DHARA-API-KEY": self.api_key})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def revoke_grant(self, grant_id: str) -> None:
+        """Revoke one of this key's own standing approvals (idempotent)."""
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.delete(f"{self.base_url}/v1/agent/grants/{grant_id}",
+                                       headers={"X-DHARA-API-KEY": self.api_key})
+        resp.raise_for_status()
+
     async def wait_for_decision(
         self,
         request_id: str,

@@ -6,18 +6,25 @@ from dataclasses import dataclass, field
 
 @dataclass
 class DisplayHints:
-    """Rendering hints for how to display tool call data in approval UIs."""
+    """Rendering hints for how to display tool call data in approval UIs.
+
+    `choices` ([{id, label}], max 4) turns the single Approve into one Approve per option; the
+    picked id comes back as `last_decision_choice` from get_request()."""
 
     title: str = ""
     category: str = ""
     sections: list[dict] = field(default_factory=list)
+    choices: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "title": self.title,
             "category": self.category,
             "sections": self.sections,
         }
+        if self.choices:
+            d["choices"] = self.choices
+        return d
 
 
 @dataclass
